@@ -9,11 +9,11 @@ This repository now includes a minimal **frontend + backend** hospital managemen
 - Browser UI powered by API endpoints
 
 ## Project Structure
-- Backend: `/home/runner/work/hospital/hospital/src/medical/backend/HospitalBackendServer.java`
-- Frontend: `/home/runner/work/hospital/hospital/src/frontend/index.html`, `/home/runner/work/hospital/hospital/src/frontend/app.js`, `/home/runner/work/hospital/hospital/src/frontend/styles.css`
+- Backend: `src/medical/backend/HospitalBackendServer.java`
+- Frontend: `src/frontend/index.html`, `src/frontend/app.js`, `src/frontend/styles.css`
 
 ## Run
-From `/home/runner/work/hospital/hospital`:
+From the repository root:
 
 ```bash
 javac src/medical/backend/HospitalBackendServer.java
