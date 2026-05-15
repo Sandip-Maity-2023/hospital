@@ -20,7 +20,8 @@ async function request(url, options = {}) {
     try {
       const body = await response.json();
       message = body.error || message;
-    } catch (_) {
+    } catch (error) {
+      console.warn("Failed to parse error response body", error);
     }
     throw new Error(message);
   }

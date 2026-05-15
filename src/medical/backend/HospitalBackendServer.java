@@ -13,13 +13,14 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 public class HospitalBackendServer {
 
@@ -66,6 +67,11 @@ public class HospitalBackendServer {
     private static class StaticFileHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
+            if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
+                sendNoContent(exchange);
+                return;
+            }
+
             if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
                 sendJson(exchange, 405, "{\"error\":\"Method not allowed\"}");
                 return;
@@ -122,10 +128,10 @@ public class HospitalBackendServer {
             }
 
             if ("POST".equalsIgnoreCase(method)) {
-                String body = readBody(exchange.getRequestBody());
-                String name = extractField(body, "name");
-                String ageText = extractField(body, "age");
-                String illness = extractField(body, "illness");
+                Map<String, String> body = parseJsonObject(readBody(exchange.getRequestBody()));
+                String name = body.getOrDefault("name", "");
+                String ageText = body.getOrDefault("age", "");
+                String illness = body.getOrDefault("illness", "");
 
                 if (isBlank(name) || isBlank(ageText) || isBlank(illness)) {
                     sendJson(exchange, 400, "{\"error\":\"name, age and illness are required\"}");
@@ -161,9 +167,9 @@ public class HospitalBackendServer {
             }
 
             if ("POST".equalsIgnoreCase(method)) {
-                String body = readBody(exchange.getRequestBody());
-                String name = extractField(body, "name");
-                String specialization = extractField(body, "specialization");
+                Map<String, String> body = parseJsonObject(readBody(exchange.getRequestBody()));
+                String name = body.getOrDefault("name", "");
+                String specialization = body.getOrDefault("specialization", "");
 
                 if (isBlank(name) || isBlank(specialization)) {
                     sendJson(exchange, 400, "{\"error\":\"name and specialization are required\"}");
@@ -191,10 +197,10 @@ public class HospitalBackendServer {
             }
 
             if ("POST".equalsIgnoreCase(method)) {
-                String body = readBody(exchange.getRequestBody());
-                String patientIdText = extractField(body, "patientId");
-                String doctorIdText = extractField(body, "doctorId");
-                String dateTime = extractField(body, "dateTime");
+                Map<String, String> body = parseJsonObject(readBody(exchange.getRequestBody()));
+                String patientIdText = body.getOrDefault("patientId", "");
+                String doctorIdText = body.getOrDefault("doctorId", "");
+                String dateTime = body.getOrDefault("dateTime", "");
 
                 if (isBlank(patientIdText) || isBlank(doctorIdText) || isBlank(dateTime)) {
                     sendJson(exchange, 400, "{\"error\":\"patientId, doctorId and dateTime are required\"}");
@@ -213,6 +219,13 @@ public class HospitalBackendServer {
 
                 if (!patientExists(patientId) || !doctorExists(doctorId)) {
                     sendJson(exchange, 400, "{\"error\":\"Referenced patient or doctor does not exist\"}");
+                    return;
+                }
+
+                try {
+                    LocalDateTime.parse(dateTime.trim());
+                } catch (DateTimeParseException ex) {
+                    sendJson(exchange, 400, "{\"error\":\"dateTime must be ISO-8601 format (e.g. 2026-05-20T10:30)\"}");
                     return;
                 }
 
@@ -281,21 +294,138 @@ public class HospitalBackendServer {
         return new String(body.readAllBytes(), StandardCharsets.UTF_8);
     }
 
-    private static String extractField(String json, String fieldName) {
+    private static Map<String, String> parseJsonObject(String json) {
+        Map<String, String> values = new HashMap<>();
         if (json == null) {
-            return "";
+            return values;
         }
-        Pattern pattern = Pattern.compile("\\\"" + Pattern.quote(fieldName) + "\\\"\\s*:\\s*(\\\"(.*?)\\\"|[-0-9]+)");
-        Matcher matcher = pattern.matcher(json);
-        if (!matcher.find()) {
-            return "";
+
+        int index = 0;
+        int length = json.length();
+        while (index < length && Character.isWhitespace(json.charAt(index))) {
+            index++;
         }
-        String quotedValue = matcher.group(2);
-        if (quotedValue != null) {
-            return quotedValue;
+        if (index >= length || json.charAt(index) != '{') {
+            return values;
         }
-        String fullValue = matcher.group(1);
-        return fullValue == null ? "" : fullValue;
+        index++;
+
+        while (index < length) {
+            while (index < length && Character.isWhitespace(json.charAt(index))) {
+                index++;
+            }
+            if (index < length && json.charAt(index) == '}') {
+                break;
+            }
+            if (index >= length || json.charAt(index) != '"') {
+                return new HashMap<>();
+            }
+
+            ParsedString keyResult = parseQuotedValue(json, index);
+            if (keyResult == null) {
+                return new HashMap<>();
+            }
+            String key = keyResult.value;
+            index = keyResult.nextIndex;
+
+            while (index < length && Character.isWhitespace(json.charAt(index))) {
+                index++;
+            }
+            if (index >= length || json.charAt(index) != ':') {
+                return new HashMap<>();
+            }
+            index++;
+
+            while (index < length && Character.isWhitespace(json.charAt(index))) {
+                index++;
+            }
+            if (index >= length) {
+                return new HashMap<>();
+            }
+
+            String value;
+            if (json.charAt(index) == '"') {
+                ParsedString valueResult = parseQuotedValue(json, index);
+                if (valueResult == null) {
+                    return new HashMap<>();
+                }
+                value = valueResult.value;
+                index = valueResult.nextIndex;
+            } else {
+                int start = index;
+                while (index < length && json.charAt(index) != ',' && json.charAt(index) != '}') {
+                    index++;
+                }
+                value = json.substring(start, index).trim();
+            }
+            values.put(key, value);
+
+            while (index < length && Character.isWhitespace(json.charAt(index))) {
+                index++;
+            }
+            if (index < length && json.charAt(index) == ',') {
+                index++;
+                continue;
+            }
+            if (index < length && json.charAt(index) == '}') {
+                break;
+            }
+        }
+        return values;
+    }
+
+    private static ParsedString parseQuotedValue(String json, int startQuoteIndex) {
+        int length = json.length();
+        if (startQuoteIndex >= length || json.charAt(startQuoteIndex) != '"') {
+            return null;
+        }
+
+        StringBuilder output = new StringBuilder();
+        int index = startQuoteIndex + 1;
+        while (index < length) {
+            char current = json.charAt(index);
+            if (current == '\\') {
+                if (index + 1 >= length) {
+                    return null;
+                }
+                char escaped = json.charAt(index + 1);
+                switch (escaped) {
+                    case '"':
+                    case '\\':
+                    case '/':
+                        output.append(escaped);
+                        break;
+                    case 'b':
+                        output.append('\b');
+                        break;
+                    case 'f':
+                        output.append('\f');
+                        break;
+                    case 'n':
+                        output.append('\n');
+                        break;
+                    case 'r':
+                        output.append('\r');
+                        break;
+                    case 't':
+                        output.append('\t');
+                        break;
+                    default:
+                        return null;
+                }
+                index += 2;
+                continue;
+            }
+
+            if (current == '"') {
+                return new ParsedString(output.toString(), index + 1);
+            }
+
+            output.append(current);
+            index++;
+        }
+
+        return null;
     }
 
     private static String escapeJson(String value) {
@@ -317,9 +447,7 @@ public class HospitalBackendServer {
         byte[] payload = responseBody.getBytes(StandardCharsets.UTF_8);
         Headers headers = exchange.getResponseHeaders();
         headers.set("Content-Type", "application/json; charset=utf-8");
-        headers.set("Access-Control-Allow-Origin", "*");
-        headers.set("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-        headers.set("Access-Control-Allow-Headers", "Content-Type");
+        setCorsHeaders(headers);
 
         if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
             exchange.sendResponseHeaders(204, -1);
@@ -329,6 +457,28 @@ public class HospitalBackendServer {
         exchange.sendResponseHeaders(status, payload.length);
         try (OutputStream os = exchange.getResponseBody()) {
             os.write(payload);
+        }
+    }
+
+    private static void sendNoContent(HttpExchange exchange) throws IOException {
+        Headers headers = exchange.getResponseHeaders();
+        setCorsHeaders(headers);
+        exchange.sendResponseHeaders(204, -1);
+    }
+
+    private static void setCorsHeaders(Headers headers) {
+        headers.set("Access-Control-Allow-Origin", "http://localhost:" + PORT);
+        headers.set("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+        headers.set("Access-Control-Allow-Headers", "Content-Type");
+    }
+
+    private static class ParsedString {
+        private final String value;
+        private final int nextIndex;
+
+        private ParsedString(String value, int nextIndex) {
+            this.value = value;
+            this.nextIndex = nextIndex;
         }
     }
 
